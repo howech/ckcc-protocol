@@ -9,7 +9,7 @@
 # That will create the command "ckcc" in your path.
 #
 # Background:
-# - see <https://github.com/trezor/cython-hidapi/blob/master/hid.pyx> for HID api 
+# - see <https://github.com/trezor/cython-hidapi/blob/master/hid.pyx> for HID api
 #
 #
 import hid, click, sys, os, pdb, struct, time, io, re, json, contextlib, tempfile
@@ -19,12 +19,12 @@ from hashlib import sha256
 from functools import wraps
 from base64 import b64decode, b64encode
 
-from ecdsa import VerifyingKey, SECP256k1
+from ecdsa import VerifyingKey, SECP256k1, SigningKey
 
 from ckcc.protocol import CCProtocolPacker, CCProtocolUnpacker
 from ckcc.protocol import CCProtoError, CCUserRefused, CCBusyError
 from ckcc.constants import MAX_MSG_LEN, MAX_BLK_LEN, MAX_USERNAME_LEN, MAX_SIGNERS
-from ckcc.constants import USER_AUTH_HMAC, USER_AUTH_TOTP, USER_AUTH_HOTP, USER_AUTH_SHOW_QR
+from ckcc.constants import USER_AUTH_HMAC, USER_AUTH_TOTP, USER_AUTH_HOTP, USER_AUTH_SHOW_QR, USER_AUTH_ECDSA
 from ckcc.constants import AF_P2SH, AF_P2WSH, AF_P2WSH_P2SH
 from ckcc.constants import STXN_FINALIZE, STXN_VISUALIZE, STXN_SIGNED, RFC_SIGNATURE_TEMPLATE
 from ckcc.client import ColdcardDevice, COINKITE_VID, CKCC_PID
@@ -103,13 +103,13 @@ def debug():
     import readline
     import atexit
     import os
-            
+
     class HistoryConsole(code.InteractiveConsole):
         def __init__(self, locals=None, filename="<console>",
                      histfile=os.path.expanduser("~/.console-history")):
             code.InteractiveConsole.__init__(self, locals, filename)
             self.init_history(histfile)
-        
+
         def init_history(self, histfile):
             readline.parse_and_bind("tab: complete")
             if hasattr(readline, "read_history_file"):
@@ -118,7 +118,7 @@ def debug():
                 except IOError:
                     pass
                 atexit.register(self.save_history, histfile)
-        
+
         def save_history(self, histfile):
             readline.write_history_file(histfile)
 
@@ -230,7 +230,7 @@ def real_file_upload(fd, dev, blksize=MAX_BLK_LEN, do_upgrade=False, do_reboot=T
 
         fd.seek(offset)
 
-    click.echo("%d bytes (start @ %d) to send from %r" % (sz, fd.tell(), 
+    click.echo("%d bytes (start @ %d) to send from %r" % (sz, fd.tell(),
             os.path.basename(fd.name) if hasattr(fd, 'name') else 'memory'), err=1)
 
     left = sz
@@ -249,7 +249,7 @@ def real_file_upload(fd, dev, blksize=MAX_BLK_LEN, do_upgrade=False, do_reboot=T
     result = dev.send_recv(CCProtocolPacker.sha256())
     assert len(result) == 32
     if result != expect:
-        click.echo("Wrong checksum:\nexpect: %s\n   got: %s" 
+        click.echo("Wrong checksum:\nexpect: %s\n   got: %s"
                     % (b2a_hex(expect).decode('ascii'), b2a_hex(result).decode('ascii')), err=1)
         sys.exit(1)
 
@@ -274,7 +274,7 @@ def real_file_upload(fd, dev, blksize=MAX_BLK_LEN, do_upgrade=False, do_reboot=T
 
 @main.command('upload')
 @click.argument('filename', type=click.File('rb'))
-@click.option('--blksize', default=MAX_BLK_LEN, 
+@click.option('--blksize', default=MAX_BLK_LEN,
             type=click.IntRange(256, MAX_BLK_LEN), help='Block size to use (testing)')
 @click.option('--multisig', '-m', default=False, is_flag=True,
                                     help='Attempt multisig enroll using file')
@@ -549,7 +549,7 @@ def sign_transaction(psbt_in, psbt_out=None, verbose=False, b64_mode=False, hex_
 
 
 @main.command('backup')
-@click.option('--outdir', '-d', 
+@click.option('--outdir', '-d',
             type=click.Path(exists=True,dir_okay=True, file_okay=False, writable=True),
             help="Save into indicated directory (auto filename)", default='.')
 @click.option('--outfile', '-o', metavar="filename.7z",
@@ -614,14 +614,14 @@ def str_to_int_path(xfp, path):
             continue
         if not i:
             continue      # trailing or duplicated slashes
-        
+
         if i[-1] in "'phHP":
             assert len(i) >= 2, i
             here = int(i[:-1]) | 0x80000000
         else:
             here = int(i)
             assert 0 <= here < 0x80000000, here
-        
+
         rv.append(here)
 
     return rv
@@ -935,11 +935,12 @@ def miniscript_address(name, change, index):
 @click.option('--ask-pass', '-a', is_flag=True, help='Define password here (interactive)')
 @click.option('--totp-secret', '-s', help='BASE32 encoded secret for TOTP 2FA method (not great)')
 @click.option('--text-secret', '-p', help='Provide password on command line (not great)')
+@click.option('--text-pubkey', '-k', help='Provide pubkey on command line')
 @click.option('--delete', '-d', 'do_delete', is_flag=True, help='Remove a user by name')
 @click.option('--show-qr', '-q', is_flag=True, help='Show enroll QR contents (locally)')
 @click.option('--hotp', is_flag=True, help='Use HOTP instead of TOTP (dev only)')
 def new_user(username, totp_create=False, totp_secret=None, text_secret=None, ask_pass=False,
-                do_delete=False, debug=False, show_qr=False, hotp=False, pick_pass=False):
+                do_delete=False, debug=False, show_qr=False, hotp=False, pick_pass=False, text_pubkey=None):
     """
     Create a new user on the Coldcard for HSM policy (also delete).
 
@@ -974,6 +975,10 @@ def new_user(username, totp_create=False, totp_secret=None, text_secret=None, as
             secret = b''
         elif pick_pass or text_secret:
             mode = USER_AUTH_HMAC
+        elif text_pubkey:
+            mode = USER_AUTH_ECDSA
+            secret = bytes.fromhex(text_pubkey)
+            assert len(secret) == 33
         else:
             # default is TOTP
             secret = b''
@@ -1031,10 +1036,12 @@ def user_auth(psbt_file, next_code=None):
 @click.argument('username', type=str, metavar="USERNAME", required=True)
 @click.argument('token', type=str, metavar="[TOTP]", required=False)
 @click.option('--psbt-file', '-f', type=click.File('rb'), required=False)
+@click.option('--private-key', '-k', type=click.File('rb'), required=False)
+@click.option('--signature', '-s', type=click.File('rb'), required=False)
 @click.option('--password', '-p', is_flag=True, help="Prompt for password")
 @click.option('--debug', '-d', is_flag=True, help='Show values used')
 @click.option('--version3', '-3', is_flag=True, help='Support obsolete 3.x.x firmware')
-def user_auth(username, token=None, password=None, prompt=None, totp=None, psbt_file=None, debug=False, version3=False):
+def user_auth(username, token=None, password=None, prompt=None, totp=None, psbt_file=None, debug=False, version3=False, private_key=None, signature=None, ) :
     """
     Indicate specific user is present (for HSM).
 
@@ -1049,21 +1056,30 @@ def user_auth(username, token=None, password=None, prompt=None, totp=None, psbt_
     with get_device() as dev:
         dev.check_mitm()
 
-        if psbt_file or password:
+        if signature:
+            token = signature.read()
+            totp_time = 0
+
+        elif psbt_file or password:
             if psbt_file:
                 psbt_hash = sha256(psbt_file.read()).digest()
                 dryrun = False
+
             else:
                 psbt_hash = bytes(32)
 
-            pw = token or click.prompt('Password (hidden)', hide_input=True)
-            secret = dev.hash_password(pw.encode('utf8'), v3=version3)
 
-            token = HMAC(secret, msg=psbt_hash, digestmod=sha256).digest()
+            if private_key:
+                key = SigningKey.from_pem(private_key.read())
+                token = b'\x04' + key.sign_digest_deterministic(psbt_hash)
+            else:
+                pw = token or click.prompt('Password (hidden)', hide_input=True)
+                secret = dev.hash_password(pw.encode('utf8'), v3=version3)
+                token = HMAC(secret, msg=psbt_hash, digestmod=sha256).digest()
 
-            if debug:
-                click.echo("  secret = %s" % B2A(secret))
-                click.echo("    salt = %s" % B2A(salt))
+                if debug:
+                    click.echo("  secret = %s" % B2A(secret))
+                    click.echo("    salt = %s" % B2A(salt))
 
             totp_time = 0
         else:
@@ -1082,7 +1098,7 @@ def user_auth(username, token=None, password=None, prompt=None, totp=None, psbt_
 
         #raise click.UsageError("Need PSBT file as part of HMAC for password")
 
-        assert token and len(token) in {6, 32}
+        assert token and len(token) in {6, 32, 65}
         username = username.encode('ascii')
 
         if debug:

@@ -57,6 +57,7 @@ TAPROOT_LEAF_TAPSCRIPT = 0xc0
 USER_AUTH_TOTP = const(1)       # RFC6238
 USER_AUTH_HOTP = const(2)       # RFC4226
 USER_AUTH_HMAC = const(3)       # PBKDF2('hmac-sha512', scrt, sha256(psbt), PBKDF2_ITER_COUNT)[:32]
+USER_AUTH_ECDSA = const(4)      # Authenticate by signing the PSBT hash.
 USER_AUTH_SHOW_QR = const(0x80) # show secret on Coldcard screen (best for TOTP enroll)
 
 MAX_USERNAME_LEN = 16
