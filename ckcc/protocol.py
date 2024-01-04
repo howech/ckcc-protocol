@@ -151,7 +151,7 @@ class CCProtocolPacker:
     @staticmethod
     def show_p2sh_address(M, xfp_paths, witdeem_script, addr_fmt=AF_P2SH):
         # For multisig (aka) P2SH cases, you will need all the info required to build
-        # the redeem script, and the Coldcard must already have been enrolled 
+        # the redeem script, and the Coldcard must already have been enrolled
         # into the wallet.
         # - redeem script must be provided
         # - full subkey paths for each involved key is required in a list of lists of ints, where
@@ -206,7 +206,7 @@ class CCProtocolPacker:
         # auth_model should be one of USER_AUTH_*
         # for TOTP/HOTP, secret can be empty. Set bit 0x80 in auth_mode and QR will be used
         assert 1 <= len(username) <= MAX_USERNAME_LEN
-        assert len(secret) in { 0, 10, 20, 32}
+        assert len(secret) in { 0, 10, 20, 32, 33}
         return pack('<4sBBB', b'nwur', auth_mode, len(username), len(secret)) + username + secret
 
     @staticmethod
@@ -219,7 +219,7 @@ class CCProtocolPacker:
     def user_auth(username, token, totp_time=0):
         # HSM mode: try an authentication method for a username
         assert 0 < len(username) <= 16
-        assert 6 <= len(token) <= 32
+        assert 6 <= len(token) <= 65
         return pack('<4sIBB', b'user', totp_time, len(username), len(token)) + username + token
 
     @staticmethod
@@ -245,10 +245,10 @@ class CCProtocolUnpacker:
             raise CCFramingError('Unknown response signature: ' + repr(sign))
 
         return d(msg)
-        
+
 
     # struct info for each response
-    
+
     def okay(msg):
         # trivial response, w/ no content
         assert len(msg) == 4
@@ -282,10 +282,10 @@ class CCProtocolUnpacker:
         return unpack_from('<3I', msg, 4)
 
     def mypb(msg):
-        # response to "ncry" command: 
+        # response to "ncry" command:
         # - the (uncompressed) pubkey of the Coldcard
         # - info about master key: xpub, fingerprint of that
-        # - anti-MitM: remote xpub 
+        # - anti-MitM: remote xpub
         # session key is SHA256(point on sec256pk1 in binary) via D-H
         dev_pubkey, fingerprint, xpub_len = unpack_from('64sII', msg, 4)
         xpub = msg[-xpub_len:] if xpub_len else b''
